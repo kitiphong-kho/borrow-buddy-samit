@@ -1,23 +1,21 @@
-import { useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import './App.css'
 import LoanForm from './components/LoanForm.jsx'
 import LoanList from './components/LoanList.jsx'
+import LoginForm from './components/LoginForm.jsx'
 import SearchBox from './components/SearchBox.jsx'
 import ThemeToggle from './components/ThemeToggle.jsx'
+import { getSession, login, logout, onAuthStateChange } from './lib/auth.js'
 import { toIsoDate } from './lib/dateFormat.js'
 import { filterLoansByFriend, markReturned, unmarkReturned } from './lib/loanRules.js'
-import { loadLoans, saveLoans } from './lib/storage.js'
+import { createLoan, fetchLoans, updateLoan } from './lib/loansApi.js'
 import { getInitialTheme, saveTheme, toggleTheme } from './lib/theme.js'
 
-const createId = () =>
-  globalThis.crypto?.randomUUID?.() ??
-  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
-
 function App() {
-  // โหลดครั้งเดียวตอนเปิดหน้า (อ่านอย่างเดียว ไม่เขียนทับข้อมูลเดิม)
-  const [initial] = useState(loadLoans)
-  const [loans, setLoans] = useState(initial.loans)
-  const [warning, setWarning] = useState(initial.warning)
+  // undefined = ยังตรวจสอบ session อยู่, null = ยังไม่ล็อกอิน, object = ล็อกอินแล้ว
+  const [session, setSession] = useState(undefined)
+  const [loans, setLoans] = useState([])
+  const [warning, setWarning] = useState(null)
   const [editingId, setEditingId] = useState(null)
   const [query, setQuery] = useState('')
   const [theme, setTheme] = useState(() =>
@@ -29,35 +27,55 @@ function App() {
     document.documentElement.dataset.theme = theme
   }, [theme])
 
+  // ตรวจ session ตอนเปิดหน้า แล้ว subscribe การเปลี่ยนสถานะ (ล็อกอิน, ออกจากระบบ, session หมดอายุ)
+  useEffect(() => {
+    getSession().then(setSession)
+    return onAuthStateChange(setSession)
+  }, [])
+
+  // โหลด Loan ของเจ้าของที่ล็อกอินอยู่ทุกครั้งที่ session เปลี่ยน
+  useEffect(() => {
+    if (!session) return
+    fetchLoans().then(({ loans: loaded, warning: loadWarning }) => {
+      setLoans(loaded)
+      setWarning(loadWarning)
+    })
+  }, [session])
+
   const handleToggleTheme = () => {
     const next = toggleTheme(theme)
     setTheme(next)
     saveTheme(next)
   }
 
+  if (session === undefined) {
+    return <main>กำลังตรวจสอบสถานะเข้าสู่ระบบ...</main>
+  }
+
+  if (session === null) {
+    return <LoginForm onLogin={login} />
+  }
+
   const today = toIsoDate(new Date())
   const editingLoan = loans.find((loan) => loan.id === editingId) ?? null
   const visibleLoans = filterLoansByFriend(loans, query)
 
-  // ทุกการเปลี่ยน Loan ต้องผ่านฟังก์ชันนี้ เพื่อบันทึกทุกครั้งที่เปลี่ยน
-  // ไม่ใช้ useEffect เพราะจะเขียนรายการว่างทับข้อมูลเดิมที่อ่านไม่ได้ตอนเปิดหน้า
-  const changeLoans = (nextLoans) => {
-    setLoans(nextLoans)
-    setWarning(saveLoans(nextLoans))
-  }
-
-  // Loan ที่ยังไม่มี id คือเพิ่มใหม่ ถ้ามี id คือแก้ไขรายการเดิม
-  const handleSave = (loan) => {
-    if (loan.id) {
-      changeLoans(loans.map((l) => (l.id === loan.id ? loan : l)))
-    } else {
-      changeLoans([...loans, { ...loan, id: createId() }])
+  const handleSave = async (loan) => {
+    const { loan: saved, warning: saveWarning } = loan.id
+      ? await updateLoan(loan)
+      : await createLoan(loan, session.user.id)
+    if (saved) {
+      setLoans(loan.id ? loans.map((l) => (l.id === saved.id ? saved : l)) : [...loans, saved])
     }
+    setWarning(saveWarning)
     setEditingId(null)
   }
 
-  const replaceLoan = (target, update) =>
-    changeLoans(loans.map((l) => (l.id === target.id ? update(l) : l)))
+  const replaceLoan = async (target, update) => {
+    const { loan: saved, warning: saveWarning } = await updateLoan(update(target))
+    if (saved) setLoans(loans.map((l) => (l.id === saved.id ? saved : l)))
+    setWarning(saveWarning)
+  }
 
   const handleMarkReturned = (loan, returnedDate) =>
     replaceLoan(loan, (l) => markReturned(l, today, returnedDate))
@@ -68,7 +86,13 @@ function App() {
     <main>
       <header className="app-header">
         <h1>Borrow Buddy</h1>
-        <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
+        <div className="app-header-actions">
+          <span>{session.user.email}</span>
+          <button type="button" onClick={() => logout()}>
+            ออกจากระบบ
+          </button>
+          <ThemeToggle theme={theme} onToggle={handleToggleTheme} />
+        </div>
       </header>
       {warning && <p role="alert">{warning}</p>}
       <LoanForm

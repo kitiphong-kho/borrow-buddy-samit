@@ -16,6 +16,27 @@ main {
   gap: 12px;
 }
 
+.app-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-h);
+}
+
+/* หน้าเข้าสู่ระบบ */
+.login-page {
+  max-width: 360px;
+  margin: 48px auto;
+  padding: 16px;
+}
+
+.login-page form h1,
+.login-page form h2 {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 /* ฟอร์มและช่องกรอก */
 label {
   display: flex;
